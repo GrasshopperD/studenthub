@@ -1,88 +1,190 @@
+import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react'
 import { AnimatePresence, LayoutGroup, motion } from 'framer-motion'
 import { schools } from '../data/courses'
 import type { Path } from '../App'
-import Bubble from './Bubble'
-import Login from './Login'
-import CourseDetail from './CourseDetail'
+import Bubble, { spring, type BubbleVariant } from './Bubble'
+import ConnectorLines, { type Edge } from './ConnectorLines'
+import CourseDetail, { ItemGhosts } from './CourseDetail'
+
+const SIZE = { user: 140, school: 120, course: 104 }
 
 interface Props {
-  username: string | null
+  username: string
   path: Path
-  onLogin: (name: string) => void
-  onSelect: (id: string) => void
+  onNavigate: (path: Path) => void
 }
 
-export default function BubbleTree({ username, path, onLogin, onSelect }: Props) {
+/** One row of the tree. Levels below the current one animate in and collapse on the way back. */
+function Level({ nodeRef, children }: { nodeRef: Ref<HTMLDivElement>; children: ReactNode }) {
+  return (
+    <motion.div
+      className="relative z-10 flex w-full justify-center pt-14"
+      initial={{ opacity: 0, y: -16 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20, transition: { duration: 0.22 } }}
+      transition={spring}
+    >
+      <div ref={nodeRef} className="flex w-full justify-center">
+        {children}
+      </div>
+    </motion.div>
+  )
+}
+
+/**
+ * Tree grows downward: user -> schools -> courses -> items.
+ * path: [] | ['user'] | ['user', school] | ['user', school, course]
+ * Level i is shown once depth >= i - 1; at depth === i - 1 it is a ghost preview.
+ */
+export default function BubbleTree({ username, path, onNavigate }: Props) {
+  const depth = path.length
   const school = schools.find((s) => s.id === path[1])
   const course = school?.courses.find((c) => c.id === path[2])
+  const pathKey = path.join('/')
 
-  if (!username) {
-    return (
-      <AnimatePresence mode="wait">
-        <Login key="login" onLogin={onLogin} />
-      </AnimatePresence>
-    )
+  const containerRef = useRef<HTMLDivElement>(null)
+  const nodes = useRef(new Map<string, HTMLElement>())
+  const refCache = useRef(new Map<string, (el: HTMLElement | null) => void>())
+  // Stable callback ref per node id; stale entries are skipped via isConnected when measuring.
+  const node = useCallback((id: string) => {
+    let fn = refCache.current.get(id)
+    if (!fn) {
+      fn = (el) => {
+        if (el) nodes.current.set(id, el)
+      }
+      refCache.current.set(id, fn)
+    }
+    return fn
+  }, [])
+
+  // Scroll so the newest level sits in the middle of the viewport (below the fixed header).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const el = nodes.current.get(`level-${depth}`)
+      if (!el?.isConnected) return
+      // offsetTop ignores in-flight transforms, so we aim at the settled position.
+      let top = 0
+      for (let e: HTMLElement | null = el; e; e = e.offsetParent as HTMLElement | null) top += e.offsetTop
+      const header = document.querySelector('header')?.offsetHeight ?? 72
+      const visible = window.innerHeight - header
+      const target =
+        el.offsetHeight > visible - 32 ? top - header - 24 : top + el.offsetHeight / 2 - header - visible / 2
+      window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
+    }, 60)
+    return () => clearTimeout(t)
+  }, [depth, pathKey])
+
+  const schoolVariant = (id: string): BubbleVariant =>
+    depth === 0 ? 'ghost' : depth === 1 ? 'normal' : id === school?.id ? 'active' : 'dim'
+  const courseVariant = (id: string): BubbleVariant =>
+    depth === 2 ? 'normal' : id === course?.id ? 'active' : 'dim'
+
+  const edges: Edge[] = schools.map((s) => ({
+    from: 'user',
+    to: `school-${s.id}`,
+    faint: depth === 0 || (depth >= 2 && s.id !== school?.id),
+  }))
+  if (depth === 1) {
+    for (const s of schools)
+      for (const c of s.courses) edges.push({ from: `school-${s.id}`, to: `course-${c.id}`, faint: true })
   }
-
-  // depth 0: big user bubble, 1: schools, 2: courses, 3: course items
-  const depth = path.length
+  if (school && depth >= 2) {
+    for (const c of school.courses)
+      edges.push({ from: `school-${school.id}`, to: `course-${c.id}`, faint: depth === 3 && c.id !== course?.id })
+  }
+  if (school && depth === 2) {
+    for (const c of school.courses) edges.push({ from: `course-${c.id}`, to: `ghostitems-${c.id}`, faint: true })
+  }
+  if (course) edges.push({ from: `course-${course.id}`, to: `items-${course.id}` })
 
   return (
     <LayoutGroup>
-      <div className="flex w-full flex-col items-center gap-8">
-        {/* Active parent bubble: shrinks as we go deeper */}
-        <AnimatePresence mode="popLayout">
-          {depth === 0 && (
-            <Bubble key="user-big" size={260} active onClick={() => onSelect('user')} label={username}>
-              <span className="break-all text-2xl">{username}</span>
-              <span className="mt-1 text-xs font-normal opacity-80">Tap to open</span>
-            </Bubble>
-          )}
-          {depth === 1 && (
-            <Bubble key="user-small" size={110} active label={username}>
-              <span className="break-all text-base">{username}</span>
-            </Bubble>
-          )}
-          {depth === 2 && school && (
-            <Bubble key={`school-${school.id}`} size={110} active label={school.name}>
-              <span className="text-base">{school.name}</span>
-            </Bubble>
-          )}
-          {depth === 3 && course && (
-            <Bubble key={`course-${course.id}`} size={120} active label={course.name}>
-              <span className="text-lg">{course.name}</span>
-              <span className="mt-0.5 text-[10px] font-normal leading-tight opacity-85">{course.subtitle}</span>
-            </Bubble>
-          )}
-        </AnimatePresence>
+      <div ref={containerRef} className="relative flex w-full flex-col items-center">
+        <ConnectorLines containerRef={containerRef} nodes={nodes} edges={edges} trigger={pathKey} />
 
-        <AnimatePresence mode="wait">
-          {depth === 1 && (
-            <motion.div key="schools" className="flex flex-wrap justify-center gap-6" exit={{ opacity: 0 }}>
-              {schools.map((s, i) => (
-                <Bubble key={s.id} size={150} from={{ y: -120 }} delay={i * 0.08} onClick={() => onSelect(s.id)}>
-                  <span className="text-xl">{s.name}</span>
-                  <span className="mt-1 text-xs font-normal text-muted">{s.courses.length} courses</span>
+        {/* Level 0: user */}
+        <div ref={node('level-0')} className="relative z-10 flex justify-center">
+          <Bubble
+            id="user"
+            nodeRef={node('user')}
+            size={SIZE.user}
+            variant="active"
+            onClick={depth === 1 ? undefined : () => onNavigate(['user'])}
+          >
+            <span className="max-w-[124px] break-words font-serif text-[26px] font-medium leading-tight">{username}</span>
+            <span className="mt-0.5 text-sm opacity-70">{depth === 0 ? 'Tap to open' : `${schools.length} schools`}</span>
+          </Bubble>
+        </div>
+
+        <AnimatePresence>
+          {/* Level 1: schools (ghosts at depth 0) */}
+          <Level key="level-1" nodeRef={node('level-1')}>
+            <div className="flex flex-wrap justify-center gap-4 sm:gap-6">
+              {schools.map((s) => (
+                <Bubble
+                  key={s.id}
+                  id={`school-${s.id}`}
+                  nodeRef={node(`school-${s.id}`)}
+                  size={SIZE.school}
+                  variant={schoolVariant(s.id)}
+                  onClick={() => onNavigate(['user', s.id])}
+                >
+                  <span className="font-serif text-2xl font-medium">{s.name}</span>
+                  <span className="text-sm opacity-70">{s.courses.length} courses</span>
                 </Bubble>
               ))}
-            </motion.div>
+            </div>
+          </Level>
+
+          {/* Level 2: courses (ghosts for every school at depth 1) */}
+          {depth >= 1 && (
+            <Level key="level-2" nodeRef={node('level-2')}>
+              {depth === 1 ? (
+                <div className="flex flex-wrap items-start justify-center gap-x-10 gap-y-4">
+                  {schools.map((s) => (
+                    <div key={s.id} className="flex flex-wrap justify-center gap-3 sm:gap-4">
+                      {s.courses.map((c) => (
+                        <Bubble key={c.id} id={`course-${c.id}`} nodeRef={node(`course-${c.id}`)} size={SIZE.course} variant="ghost" />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                school && (
+                  <div className="flex flex-wrap justify-center gap-3 sm:gap-4">
+                    {school.courses.map((c) => (
+                      <Bubble
+                        key={c.id}
+                        id={`course-${c.id}`}
+                        nodeRef={node(`course-${c.id}`)}
+                        size={SIZE.course}
+                        variant={courseVariant(c.id)}
+                        title={c.subtitle}
+                        onClick={() => onNavigate(['user', school.id, c.id])}
+                      >
+                        <span className="whitespace-nowrap font-serif text-[21px] font-medium tracking-tight">{c.name}</span>
+                        <span className="text-sm opacity-70">{c.items.length} items</span>
+                      </Bubble>
+                    ))}
+                  </div>
+                )
+              )}
+            </Level>
           )}
 
-          {depth === 2 && school && (
-            <motion.div key={`courses-${school.id}`} className="flex flex-wrap justify-center gap-5" exit={{ opacity: 0 }}>
-              {school.courses.map((c, i) => (
-                <Bubble key={c.id} size={140} from={{ y: -120 }} delay={i * 0.08} onClick={() => onSelect(c.id)}>
-                  <span className="text-lg">{c.name}</span>
-                  <span className="mt-1 text-[11px] font-normal leading-tight text-muted">{c.subtitle}</span>
-                </Bubble>
-              ))}
-            </motion.div>
-          )}
-
-          {depth === 3 && course && (
-            <motion.div key={`detail-${course.id}`} className="flex w-full justify-center" exit={{ opacity: 0 }}>
-              <CourseDetail course={course} />
-            </motion.div>
+          {/* Level 3: items (ghost bars under each course at depth 2) */}
+          {depth >= 2 && school && (
+            <Level key="level-3" nodeRef={node('level-3')}>
+              {course ? (
+                <CourseDetail course={course} nodeRef={node(`items-${course.id}`)} />
+              ) : (
+                <div className="flex flex-wrap items-start justify-center gap-3 sm:gap-4">
+                  {school.courses.map((c) => (
+                    <ItemGhosts key={c.id} course={c} nodeRef={node(`ghostitems-${c.id}`)} />
+                  ))}
+                </div>
+              )}
+            </Level>
           )}
         </AnimatePresence>
       </div>

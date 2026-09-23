@@ -1,41 +1,68 @@
 import { motion } from 'framer-motion'
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 
-export const spring = { type: 'spring', stiffness: 260, damping: 22 } as const
+export const spring = { type: 'spring', stiffness: 300, damping: 28 } as const
+
+/**
+ * active: on the current path (Claude orange)
+ * normal: the level you're choosing from right now
+ * dim:    a sibling in an already visited level, still clickable to switch branch
+ * ghost:  skeleton teaser of the next level, no text
+ */
+export type BubbleVariant = 'active' | 'normal' | 'dim' | 'ghost'
 
 interface Props {
-  size?: number
-  active?: boolean
+  /** Also the layoutId, so a ghost morphs into the real bubble with the same id. */
+  id: string
+  size: number
+  variant: BubbleVariant
+  nodeRef?: Ref<HTMLElement>
   onClick?: () => void
-  children: ReactNode
-  /** Offset in px the bubble animates in from. */
-  from?: { x?: number; y?: number }
-  delay?: number
-  label?: string
+  title?: string
+  children?: ReactNode
 }
 
-export default function Bubble({ size = 140, active, onClick, children, from, delay = 0, label }: Props) {
-  const clickable = !!onClick
+const base =
+  'flex shrink-0 flex-col items-center justify-center rounded-full border text-center outline-none transition-colors duration-300'
+
+const styles: Record<BubbleVariant, string> = {
+  active: 'border-claude bg-claude text-[#1f1e1d] shadow-[0_0_36px_-6px_rgba(217,119,87,0.55)]',
+  normal:
+    'border-border bg-surface text-ink shadow-lg shadow-black/30 hover:border-claude hover:shadow-[0_0_28px_-8px_rgba(217,119,87,0.6)]',
+  dim: 'border-dashed border-[#4d4c47] bg-bg text-ink/40 hover:border-claude/60 hover:text-ink/75',
+  ghost: 'shimmer border-dashed border-white/12',
+}
+
+export default function Bubble({ id, size, variant, nodeRef, onClick, title, children }: Props) {
+  if (variant === 'ghost') {
+    return (
+      <motion.div
+        ref={nodeRef as Ref<HTMLDivElement>}
+        layoutId={id}
+        aria-hidden
+        initial={{ opacity: 0, scale: 0.85 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={spring}
+        style={{ width: size, height: size }}
+        className={`${base} ${styles.ghost}`}
+      />
+    )
+  }
+
   return (
     <motion.button
+      ref={nodeRef as Ref<HTMLButtonElement>}
       type="button"
-      layout
-      aria-label={label}
+      layoutId={id}
+      title={title}
       onClick={onClick}
-      initial={{ scale: 0, opacity: 0, x: from?.x ?? 0, y: from?.y ?? 0 }}
-      animate={{ scale: 1, opacity: 1, x: 0, y: 0 }}
-      exit={{ scale: 0, opacity: 0, transition: { duration: 0.18 } }}
-      transition={{ ...spring, delay }}
-      whileHover={clickable ? { scale: 1.08 } : undefined}
-      whileTap={clickable ? { scale: 0.95 } : undefined}
+      initial={{ opacity: 0.4 }}
+      animate={{ opacity: 1 }}
+      transition={spring}
+      whileHover={onClick ? { scale: 1.06 } : undefined}
+      whileTap={onClick ? { scale: 0.95 } : undefined}
       style={{ width: size, height: size }}
-      className={[
-        'flex shrink-0 flex-col items-center justify-center rounded-full border p-3 text-center font-semibold outline-none',
-        clickable ? 'cursor-pointer' : 'cursor-default',
-        active
-          ? 'border-claude bg-claude text-white shadow-[0_0_40px_-6px_rgba(217,119,87,0.6)]'
-          : 'border-border bg-surface text-ink shadow-lg shadow-black/30 hover:border-claude hover:shadow-[0_0_28px_-8px_rgba(217,119,87,0.6)] focus-visible:border-claude',
-      ].join(' ')}
+      className={`${base} ${styles[variant]} ${onClick ? 'cursor-pointer' : 'cursor-default'} focus-visible:ring-2 focus-visible:ring-claude/70 focus-visible:ring-offset-2 focus-visible:ring-offset-bg`}
     >
       {children}
     </motion.button>

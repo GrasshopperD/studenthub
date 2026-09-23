@@ -1,20 +1,38 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import BubbleTree from './components/BubbleTree'
 import BackButton from './components/BackButton'
 import Breadcrumb from './components/Breadcrumb'
+import Login from './components/Login'
 import { schools } from './data/courses'
+import { capitalizeName } from './lib/format'
 
 // Navigation state lives here as a path array:
-// [] (big user bubble) | ['user'] | ['user', 'waterloo'] | ['user', 'waterloo', 'math137']
+// [] (user bubble) | ['user'] | ['user', 'waterloo'] | ['user', 'waterloo', 'math137']
 export type Path = string[]
 
 export default function App() {
   const [username, setUsername] = useState<string | null>(null)
   const [path, setPath] = useState<Path>([])
 
-  const push = (id: string) => setPath((p) => [...p, id])
-  const back = () => setPath((p) => p.slice(0, -1))
-  const jumpTo = (depth: number) => setPath((p) => p.slice(0, depth))
+  const login = (name: string) => {
+    setUsername(capitalizeName(name))
+    setPath([])
+  }
+
+  // One level up; at the root, back returns to the sign-in bubble.
+  const back = () => {
+    if (path.length > 0) setPath((p) => p.slice(0, -1))
+    else setUsername(null)
+  }
+
+  useEffect(() => {
+    if (!username) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPath((p) => (p.length ? p.slice(0, -1) : p))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [username])
 
   const labelFor = (id: string, i: number): string => {
     if (i === 0) return username ?? 'User'
@@ -28,18 +46,30 @@ export default function App() {
       : path.map((id, i) => ({ label: labelFor(id, i), depth: i + 1 }))
 
   return (
-    <div className="flex min-h-full flex-col px-4 py-4 sm:px-8">
-      <header className="flex flex-wrap items-center gap-3">
-        <BackButton disabled={!username || path.length === 0} onClick={back} />
-        {username && <Breadcrumb crumbs={crumbs} current={path.length} onJump={jumpTo} />}
-        <span className="ml-auto text-sm font-semibold tracking-tight text-muted">
-          Student<span className="text-claude">Hub</span>
-        </span>
+    <div className="min-h-screen">
+      <header className="fixed inset-x-0 top-0 z-40 border-b border-white/5 bg-bg/75 backdrop-blur-md">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 sm:px-6">
+          {username && <BackButton onClick={back} />}
+          {username && (
+            <div className="order-3 w-full sm:order-2 sm:w-auto">
+              <Breadcrumb crumbs={crumbs} current={path.length} onJump={(d) => setPath((p) => p.slice(0, d))} />
+            </div>
+          )}
+          <span className="order-2 ml-auto flex h-11 items-center font-serif text-xl font-semibold tracking-tight sm:order-3">
+            Student<span className="text-claude">Hub</span>
+          </span>
+        </div>
       </header>
 
-      <main className="flex flex-1 items-center justify-center py-6">
-        <BubbleTree username={username} path={path} onLogin={setUsername} onSelect={push} />
-      </main>
+      {username ? (
+        <main className="mx-auto w-full max-w-[900px] px-4 pb-[35vh] pt-[132px] sm:pt-[100px]">
+          <BubbleTree username={username} path={path} onNavigate={setPath} />
+        </main>
+      ) : (
+        <main className="flex min-h-screen items-center justify-center px-4">
+          <Login onLogin={login} />
+        </main>
+      )}
     </div>
   )
 }
